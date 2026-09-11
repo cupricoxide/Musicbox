@@ -1,0 +1,484 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Oscillator → Feedback Delay — AudioWorklet Study</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap');
+
+:root{
+  --bg:#12141a;
+  --panel:#1b1e26;
+  --panel-border:#2a2f3b;
+  --text:#e7e5df;
+  --text-dim:#868c99;
+  --amber:#ffb454;
+  --cyan:#5ee6c4;
+  --danger:#ff6b6b;
+}
+*{box-sizing:border-box;}
+body{
+  margin:0;
+  background:var(--bg);
+  color:var(--text);
+  font-family:'Space Grotesk', sans-serif;
+  padding:28px 20px 60px;
+  min-height:100vh;
+}
+.wrap{max-width:920px;margin:0 auto;}
+
+header{margin-bottom:28px;}
+h1{
+  font-size:1.5rem;
+  font-weight:700;
+  margin:0 0 6px;
+  letter-spacing:-0.01em;
+}
+.sub{
+  color:var(--text-dim);
+  font-size:0.92rem;
+  line-height:1.5;
+  max-width:60ch;
+}
+
+.flowrow{
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  gap:6px;
+  margin:22px 0 10px;
+  font-family:'IBM Plex Mono', monospace;
+  font-size:0.72rem;
+  color:var(--text-dim);
+}
+.flowrow .arrow{color:var(--amber);}
+
+.modules{
+  display:grid;
+  grid-template-columns:1fr 1fr;
+  gap:14px;
+}
+@media (max-width:560px){ .modules{grid-template-columns:1fr;} }
+
+.panel{
+  background:var(--panel);
+  border:1px solid var(--panel-border);
+  border-radius:6px;
+  padding:16px 18px 18px;
+}
+.panel h2{
+  font-size:0.72rem;
+  text-transform:uppercase;
+  letter-spacing:0.08em;
+  font-weight:500;
+  color:var(--text-dim);
+  margin:0 0 14px;
+  display:flex;
+  align-items:center;
+  gap:7px;
+}
+.dot{width:7px;height:7px;border-radius:50%;flex-shrink:0;}
+.dot.amber{background:var(--amber);box-shadow:0 0 6px var(--amber);}
+.dot.cyan{background:var(--cyan);box-shadow:0 0 6px var(--cyan);}
+
+.ctrl{margin-bottom:14px;}
+.ctrl:last-child{margin-bottom:0;}
+.ctrl-label{
+  display:flex;
+  justify-content:space-between;
+  font-size:0.82rem;
+  margin-bottom:6px;
+}
+.ctrl-label .rate-tag{
+  font-family:'IBM Plex Mono', monospace;
+  font-size:0.65rem;
+  color:var(--text-dim);
+  border:1px solid var(--panel-border);
+  border-radius:3px;
+  padding:1px 5px;
+}
+.ctrl-label .val{
+  font-family:'IBM Plex Mono', monospace;
+  color:var(--amber);
+}
+input[type=range]{
+  width:100%;
+  -webkit-appearance:none;
+  appearance:none;
+  height:3px;
+  background:var(--panel-border);
+  border-radius:2px;
+  outline:none;
+}
+input[type=range]::-webkit-slider-thumb{
+  -webkit-appearance:none;
+  appearance:none;
+  width:14px;height:14px;
+  border-radius:50%;
+  background:var(--amber);
+  cursor:pointer;
+  border:2px solid var(--bg);
+}
+input[type=range]::-moz-range-thumb{
+  width:14px;height:14px;
+  border-radius:50%;
+  background:var(--amber);
+  cursor:pointer;
+  border:2px solid var(--bg);
+}
+
+.output-panel{grid-column:1 / -1;}
+canvas{
+  width:100%;
+  height:120px;
+  display:block;
+  background:#0d0f14;
+  border-radius:4px;
+  border:1px solid var(--panel-border);
+  margin-bottom:14px;
+}
+button{
+  font-family:'Space Grotesk', sans-serif;
+  font-weight:500;
+  font-size:0.88rem;
+  padding:9px 20px;
+  border-radius:5px;
+  border:1px solid var(--panel-border);
+  background:#22262f;
+  color:var(--text);
+  cursor:pointer;
+}
+button:hover{border-color:var(--amber);}
+button.playing{background:var(--amber);color:#1a1200;border-color:var(--amber);}
+.warn{
+  font-family:'IBM Plex Mono', monospace;
+  font-size:0.7rem;
+  color:var(--danger);
+  margin-top:10px;
+  opacity:0;
+  transition:opacity .2s;
+}
+.warn.show{opacity:1;}
+.warn:not(:empty){opacity:1;}
+.status{
+  font-family:'IBM Plex Mono', monospace;
+  font-size:0.7rem;
+  color:var(--text-dim);
+  margin-top:10px;
+}
+
+.notes{
+  margin-top:30px;
+  border-top:1px solid var(--panel-border);
+  padding-top:20px;
+}
+.notes h3{
+  font-size:0.85rem;
+  margin:0 0 10px;
+  color:var(--text-dim);
+  font-weight:500;
+}
+.notes dl{margin:0;font-size:0.86rem;line-height:1.6;}
+.notes dt{color:var(--amber);font-weight:500;margin-top:12px;}
+.notes dt:first-child{margin-top:0;}
+.notes dd{margin:3px 0 0;color:var(--text-dim);}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>Oscillator → Feedback Delay</h1>
+    <div class="sub">A minimal AudioWorklet signal chain. Frequency and gain are computed a-rate (per sample); feedback and delay time are computed k-rate (per 128-sample block) — the same control/audio-rate split Pd and Max build their whole architecture around.</div>
+  </header>
+
+  <div class="flowrow">
+    OSCILLATOR <span class="arrow">→ audio signal →</span> FEEDBACK DELAY <span class="arrow">→ audio signal →</span> OUTPUT
+  </div>
+
+  <div class="modules">
+    <div class="panel">
+      <h2><span class="dot amber"></span>Oscillator</h2>
+      <div class="ctrl">
+        <div class="ctrl-label"><span>Frequency <span class="rate-tag">a-rate</span></span><span class="val" id="freqVal">220 Hz</span></div>
+        <input type="range" id="freq" min="40" max="1200" step="1" value="220">
+      </div>
+      <div class="ctrl">
+        <div class="ctrl-label"><span>Gain <span class="rate-tag">a-rate</span></span><span class="val" id="gainVal">0.20</span></div>
+        <input type="range" id="gain" min="0" max="0.6" step="0.01" value="0.2">
+      </div>
+    </div>
+
+    <div class="panel">
+      <h2><span class="dot cyan"></span>Feedback Delay</h2>
+      <div class="ctrl">
+        <div class="ctrl-label"><span>Delay time <span class="rate-tag">k-rate</span></span><span class="val" id="delayVal">250 ms</span></div>
+        <input type="range" id="delay" min="10" max="1200" step="1" value="250">
+      </div>
+      <div class="ctrl">
+        <div class="ctrl-label"><span>Feedback <span class="rate-tag">k-rate</span></span><span class="val" id="fbVal">0.30</span></div>
+        <input type="range" id="fb" min="0" max="0.9" step="0.01" value="0.3">
+      </div>
+    </div>
+
+    <div class="panel output-panel">
+      <h2><span class="dot amber"></span>Output</h2>
+      <canvas id="scope"></canvas>
+      <button id="playBtn">Start</button>
+      <div class="status" id="engineStatus">engine: not started</div>
+      <div class="warn" id="warn">feedback ≥ 0.85 — building energy, watch your volume</div>
+      <div class="warn" id="errorMsg"></div>
+    </div>
+  </div>
+
+  <div class="notes">
+    <h3>What's actually happening, mapped to Puckette's terms</h3>
+    <dl>
+      <dt>Block-rate processing</dt>
+      <dd>The browser's audio thread calls this processor's <code>process()</code> once per 128-sample render quantum. Everything inside that call is a plain sample-by-sample loop — the same boundary Pd draws between "the scheduler calls a ugen" and "the ugen fills its block."</dd>
+      <dt>Control rate vs. audio rate</dt>
+      <dd>Frequency and gain are declared a-rate: the browser interpolates them every single sample, so moving the slider glides smoothly with no zipper noise. Feedback and delay time are k-rate: read once at the start of each 128-sample block, then held constant for the whole block — exactly how a control message updates a Pd object between blocks rather than within one.</dd>
+      <dt>Delay-free feedback loops</dt>
+      <dd>The feedback path reads from a circular buffer at a position that's always at least one block behind the write position. That built-in lag is what makes the cycle computable at all — it's the same reason Pd silently inserts a one-block delay into any patch cord that closes a loop back on itself.</dd>
+    </dl>
+  </div>
+</div>
+
+<script>
+const workletCode = `
+class OscDelayProcessor extends AudioWorkletProcessor {
+  static get parameterDescriptors() {
+    return [
+      { name: 'frequency', defaultValue: 220, minValue: 20, maxValue: 4000, automationRate: 'a-rate' },
+      { name: 'gain',      defaultValue: 0.2, minValue: 0,  maxValue: 1,    automationRate: 'a-rate' },
+      { name: 'delayTime', defaultValue: 0.25, minValue: 0.001, maxValue: 2, automationRate: 'k-rate' },
+      { name: 'feedback',  defaultValue: 0.3, minValue: 0,  maxValue: 0.95, automationRate: 'k-rate' },
+    ];
+  }
+  constructor() {
+    super();
+    this.phase = 0;
+    this.maxDelaySeconds = 2.0;
+    this.bufferSize = Math.ceil(sampleRate * this.maxDelaySeconds);
+    this.delayBuffer = new Float32Array(this.bufferSize);
+    this.writeIndex = 0;
+  }
+  process(inputs, outputs, parameters) {
+    const output = outputs[0];
+    const freqParam = parameters.frequency;
+    const gainParam = parameters.gain;
+    const delaySec = parameters.delayTime[0];
+    const feedback = parameters.feedback[0];
+
+    const delaySamples = Math.min(
+      Math.max(Math.round(delaySec * sampleRate), 1),
+      this.bufferSize - 1
+    );
+
+    const channel = output[0];
+    for (let i = 0; i < channel.length; i++) {
+      const freq = freqParam.length > 1 ? freqParam[i] : freqParam[0];
+      const gain = gainParam.length > 1 ? gainParam[i] : gainParam[0];
+
+      this.phase += freq / sampleRate;
+      if (this.phase >= 1) this.phase -= 1;
+      const osc = Math.sin(2 * Math.PI * this.phase) * gain;
+
+      const readIndex = (this.writeIndex - delaySamples + this.bufferSize) % this.bufferSize;
+      const delayed = this.delayBuffer[readIndex];
+
+      let y = osc + delayed * feedback;
+      y = Math.tanh(y); // soft clip, keeps the feedback loop bounded
+
+      this.delayBuffer[this.writeIndex] = y;
+      this.writeIndex = (this.writeIndex + 1) % this.bufferSize;
+
+      channel[i] = y;
+    }
+    // mirror to any additional output channels
+    for (let ch = 1; ch < output.length; ch++) {
+      output[ch].set(channel);
+    }
+    return true;
+  }
+}
+registerProcessor('osc-delay-processor', OscDelayProcessor);
+`;
+
+let ctx, node, analyser, playing = false;
+const paramTargets = { frequency: 220, gain: 0.2, delayTime: 0.25, feedback: 0.3 };
+const scope = document.getElementById('scope');
+const scopeCtx = scope.getContext('2d');
+const statusEl = document.getElementById('engineStatus');
+const errorEl = document.getElementById('errorMsg');
+
+function showError(msg) {
+  errorEl.textContent = msg;
+  console.error(msg);
+}
+
+function resizeCanvas() {
+  scope.width = scope.clientWidth * devicePixelRatio;
+  scope.height = scope.clientHeight * devicePixelRatio;
+}
+window.addEventListener('resize', resizeCanvas);
+
+function drawScope() {
+  requestAnimationFrame(drawScope);
+  if (!analyser) return;
+  const data = new Float32Array(analyser.fftSize);
+  analyser.getFloatTimeDomainData(data);
+  const w = scope.width, h = scope.height;
+  scopeCtx.clearRect(0, 0, w, h);
+  scopeCtx.beginPath();
+  scopeCtx.lineWidth = 2 * devicePixelRatio;
+  scopeCtx.strokeStyle = '#ffb454';
+  scopeCtx.shadowColor = '#ffb454';
+  scopeCtx.shadowBlur = 6;
+  for (let i = 0; i < data.length; i++) {
+    const x = (i / data.length) * w;
+    const y = h / 2 - data[i] * h * 0.45;
+    if (i === 0) scopeCtx.moveTo(x, y);
+    else scopeCtx.lineTo(x, y);
+  }
+  scopeCtx.stroke();
+}
+
+function unlockAudio() {
+  // Some mobile/embedded webviews keep audio hardware asleep until a real
+  // buffer plays inside a user-gesture handler. This nudges it awake.
+  const silentBuffer = ctx.createBuffer(1, 1, 22050);
+  const src = ctx.createBufferSource();
+  src.buffer = silentBuffer;
+  src.connect(ctx.destination);
+  src.start(0);
+}
+
+function setupScriptProcessorFallback() {
+  const bufferSize = 1024;
+  const maxDelaySeconds = 2.0;
+  const delayBufferSize = Math.ceil(ctx.sampleRate * maxDelaySeconds);
+  const delayBuffer = new Float32Array(delayBufferSize);
+  let writeIndex = 0;
+  let phase = 0;
+  let curFreq = paramTargets.frequency;
+  let curGain = paramTargets.gain;
+  const smooth = 0.002;
+
+  const sp = ctx.createScriptProcessor(bufferSize, 1, 2);
+  sp.onaudioprocess = (e) => {
+    const outL = e.outputBuffer.getChannelData(0);
+    const outR = e.outputBuffer.getChannelData(1);
+    const delaySamples = Math.min(
+      Math.max(Math.round(paramTargets.delayTime * ctx.sampleRate), 1),
+      delayBufferSize - 1
+    );
+    const feedback = paramTargets.feedback;
+    for (let i = 0; i < bufferSize; i++) {
+      curFreq += (paramTargets.frequency - curFreq) * smooth;
+      curGain += (paramTargets.gain - curGain) * smooth;
+      phase += curFreq / ctx.sampleRate;
+      if (phase >= 1) phase -= 1;
+      const osc = Math.sin(2 * Math.PI * phase) * curGain;
+
+      const readIndex = (writeIndex - delaySamples + delayBufferSize) % delayBufferSize;
+      const delayed = delayBuffer[readIndex];
+      let y = osc + delayed * feedback;
+      y = Math.tanh(y);
+      delayBuffer[writeIndex] = y;
+      writeIndex = (writeIndex + 1) % delayBufferSize;
+
+      outL[i] = y;
+      outR[i] = y;
+    }
+  };
+  node = sp;
+}
+
+async function setup() {
+  const AC = window.AudioContext || window.webkitAudioContext;
+  ctx = new AC();
+  unlockAudio();
+
+  analyser = ctx.createAnalyser();
+  analyser.fftSize = 2048;
+
+  let engine = 'AudioWorklet';
+  try {
+    if (!ctx.audioWorklet) throw new Error('AudioWorklet not supported in this webview');
+    const blob = new Blob([workletCode], { type: 'application/javascript' });
+    const url = URL.createObjectURL(blob);
+    await ctx.audioWorklet.addModule(url);
+    node = new AudioWorkletNode(ctx, 'osc-delay-processor', { outputChannelCount: [2] });
+  } catch (err) {
+    engine = 'ScriptProcessor (fallback)';
+    showError(`AudioWorklet failed, using fallback: ${err.message}`);
+    setupScriptProcessorFallback();
+  }
+
+  node.connect(analyser);
+  node.connect(ctx.destination);
+  statusEl.textContent = `engine: ${engine} — context: ${ctx.state}`;
+
+  bindControl('freq', 'freqVal', v => `${v} Hz`, v => setParam('frequency', v));
+  bindControl('gain', 'gainVal', v => v.toFixed(2), v => setParam('gain', v));
+  bindControl('delay', 'delayVal', v => `${v} ms`, v => setParam('delayTime', v / 1000));
+  bindControl('fb', 'fbVal', v => v.toFixed(2), v => {
+    setParam('feedback', v);
+    document.getElementById('warn').classList.toggle('show', v >= 0.85);
+  });
+
+  // apply current slider values immediately so the fallback path (which
+  // reads paramTargets directly, not AudioParams) starts in sync
+  setParam('frequency', paramTargets.frequency);
+  setParam('gain', paramTargets.gain);
+  setParam('delayTime', paramTargets.delayTime);
+  setParam('feedback', paramTargets.feedback);
+}
+
+function setParam(name, value) {
+  paramTargets[name] = value;
+  if (node && node.parameters) {
+    const p = node.parameters.get(name);
+    if (p) p.setTargetAtTime(value, ctx.currentTime, 0.02);
+  }
+}
+
+function bindControl(inputId, labelId, formatFn, onChange) {
+  const input = document.getElementById(inputId);
+  const label = document.getElementById(labelId);
+  const update = () => {
+    const v = parseFloat(input.value);
+    label.textContent = formatFn(v);
+    onChange(v);
+  };
+  input.addEventListener('input', update);
+}
+
+document.getElementById('playBtn').addEventListener('click', async () => {
+  const btn = document.getElementById('playBtn');
+  try {
+    if (!ctx) await setup();
+    if (!playing) {
+      await ctx.resume();
+      playing = true;
+      btn.textContent = 'Stop';
+      btn.classList.add('playing');
+      statusEl.textContent = statusEl.textContent.replace(/context: \w+/, `context: ${ctx.state}`);
+    } else {
+      await ctx.suspend();
+      playing = false;
+      btn.textContent = 'Start';
+      btn.classList.remove('playing');
+      statusEl.textContent = statusEl.textContent.replace(/context: \w+/, `context: ${ctx.state}`);
+    }
+  } catch (err) {
+    showError(`Playback error: ${err.message}`);
+  }
+});
+
+resizeCanvas();
+drawScope();
+</script>
+</body>
+</html>
