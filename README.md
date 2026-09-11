@@ -1,1 +1,1 @@
-Web audio project inspired by Max/Pd digital audio real time processors; basic oscillators and DSP modules - created for use in Web Browser; code by Claude 5.0
+Web audio project inspired by Max/Pd digital audio real time processors; basic oscillators and DSP modules - files are pure html designed to be open and run in any modern web browser (Chrome, Firefox, Edge); code by Claude 5.0
